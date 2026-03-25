@@ -1,0 +1,58 @@
+#!/bin/bash
+set -euo pipefail
+
+BASE="{{ base_path }}"
+OUTDIR="{{ outdir_path }}"
+PIPE_USER="${PIPE_USER:-unknown}"
+
+RUN_DATE="$(date +%F)"
+RUN_TIME="$(date +%H%M%S)"
+
+# Uses scan_location in filename; if scan_location contains '/', we create needed subdirs.
+OUTFILE="${OUTDIR}/{{ scan_location | default('inventory') }}_files_${RUN_DATE}_${PIPE_USER}_${RUN_TIME}.txt"
+
+# Control concurrency via env var from Tower/Ansible environment:
+# environment:
+#   PARALLELISM: "16"
+PARALLELISM="${PARALLELISM:-16}"
+
+ERRROOT="/tmp/usershome_find_err_${RUN_DATE}_${RUN_TIME}"
+TMPROOT="$(mktemp -d "/tmp/efs_inv_${RUN_DATE}_${RUN_TIME}.XXXXXX")"
+
+mkdir -p "$(dirname "$OUTFILE")"
+mkdir -p "$ERRROOT"
+
+# Parallelize the expensive stat loop. Each worker writes to its own output file,
+# then we concatenate at the end to avoid write contention.
+find "$BASE" -mindepth 1 -type f -print0 2>>"$ERRROOT/find.err" |
+xargs -0 -n 200 -P "$PARALLELISM" bash -c '
+  set -euo pipefail
+  tmproot="$1"; errroot="$2"; shift 2
+  out="$tmproot/out.$$.$RANDOM.txt"
+  err="$errroot/stat.$$.$RANDOM.err"
+
+  for p in "$@"; do
+    raw=$(/usr/bin/stat -c "%n|%w|%x|%y|%z" "$p" 2>>"$err") || {
+      echo "$p name - time of file birth - time of last access - time of last data modification -" >> "$out"
+      continue
+    }
+    IFS="|" read -r spath birth atime mtime ctime <<< "$raw"
+    [ "$birth" = "-" ] && birth="$ctime"
+    printf "%s name - time of file birth %s time of last access %s time of last data modification %s\n" \
+      "$spath" "$birth" "$atime" "$mtime" >> "$out"
+  done
+' _ "$TMPROOT" "$ERRROOT"
+
+: > "$OUTFILE"
+cat "$TMPROOT"/out.*.txt >> "$OUTFILE" 2>/dev/null || true
+
+ERRLOG="/tmp/usershome_find_err_${RUN_DATE}_${RUN_TIME}.log"
+cat "$ERRROOT"/* 2>/dev/null > "$ERRLOG" || true
+
+rm -rf "$TMPROOT" "$ERRROOT"
+
+echo "Wrote: $OUTFILE"
+echo "Output file location (full path): $OUTFILE"
+echo "Errors (if any): $ERRLOG"
+echo "Parallelism used: $PARALLELISM"
+
