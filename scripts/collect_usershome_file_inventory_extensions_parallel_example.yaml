@@ -1,0 +1,29 @@
+---
+# Example playbook snippet to run the fast "extensions only" parallel inventory.
+# Output format matches the existing inventory line format, so you can skip the
+# separate extension filter step.
+
+- name: Deploy extensions-only inventory script to target
+  template:
+    src: efs_usershome_inventory_extensions_parallel.sh.j2
+    dest: /tmp/efs_usershome_inventory_extensions_parallel.sh
+    mode: "0755"
+
+- name: Run EFS file inventory (extensions only, parallel)
+  command: /bin/bash /tmp/efs_usershome_inventory_extensions_parallel.sh
+  environment:
+    PIPE_USER: "{{ pipe_user_for_inventory | default('unknown') }}"
+    PARALLELISM: "{{ parallelism | default('16') }}"
+  register: usershome_files_inventory
+  changed_when: false
+
+- name: Print output file location in Tower job log
+  debug:
+    msg: "{{ usershome_files_inventory.stdout_lines }}"
+  when: usershome_files_inventory.stdout_lines | length > 0
+
+- name: Remove temporary inventory script
+  file:
+    path: /tmp/efs_usershome_inventory_extensions_parallel.sh
+    state: absent
+
