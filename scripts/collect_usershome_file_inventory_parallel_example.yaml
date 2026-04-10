@@ -21,14 +21,18 @@
     msg: "{{ usershome_files_inventory.stdout_lines }}"
   when: usershome_files_inventory.stdout_lines | length > 0
 
+# ls exits 2 when glob matches nothing; with pipefail that fails the task. Turn pipefail off for this pipeline only.
+# Ensure outdir_path and scan_location match this run (e.g. teams-shared output dir + teams-shared_files_*.txt).
 - name: Keep only latest 4 inventory files for this scan_location
   command: >
     /bin/bash -lc
-    'set -euo pipefail;
+    'set -u;
      d="{{ outdir_path }}";
      p="{{ scan_location }}_files_*.txt";
      cd "$d" 2>/dev/null || exit 0;
-     ls -1t -- $p 2>/dev/null | tail -n +5 | xargs -r rm -f --'
+     ( set +e; set +o pipefail;
+       ls -1t -- $p 2>/dev/null | tail -n +5 | xargs -r rm -f --
+     )'
   changed_when: false
 
 - name: Remove temporary inventory script
